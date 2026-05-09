@@ -7,6 +7,7 @@ from src.db.session import engine
 from src.logging import setup_logging
 from src.models.job import Base
 from src.api.routes import jobs, health, metrics
+from src.api.middleware import CorrelationIDMiddleware
 
 
 @asynccontextmanager
@@ -28,6 +29,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(CorrelationIDMiddleware)
 
 app.include_router(jobs.router, tags=["jobs"])
 app.include_router(health.router, tags=["health"])

@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 import structlog
+import structlog.contextvars
 from sqlalchemy import select, update
 
 from src.config import settings
@@ -84,9 +85,14 @@ async def claim_job():
 
 
 async def process_job(job_id):
-    """Process a single job through the state machine. Stub for now — agent goes here."""
-    correlation_id = str(uuid.uuid4())
-    log_ctx = log.bind(job_id=job_id, correlation_id=correlation_id)
+    """Process a single job through the state machine."""
+    # Read correlation_id set by the API, fall back to a new one
+    async with async_session() as peek_session:
+        peek = await peek_session.execute(select(Job.correlation_id).where(Job.id == job_id))
+        correlation_id = peek.scalar_one_or_none() or str(uuid.uuid4())
+
+    structlog.contextvars.bind_contextvars(correlation_id=correlation_id, component="worker")
+    log_ctx = log.bind(job_id=job_id)
 
     async with async_session() as session:
         result = await session.execute(select(Job).where(Job.id == job_id))
@@ -141,6 +147,7 @@ async def main():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    structlog.contextvars.bind_contextvars(component="worker")
     log.info("worker_started", concurrency=settings.worker_concurrency)
 
     await recover_stale_jobs()

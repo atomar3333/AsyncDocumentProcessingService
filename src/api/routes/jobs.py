@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,8 +22,8 @@ log = structlog.get_logger()
 
 
 @router.post("/jobs", response_model=JobCreateResponse, status_code=202)
-async def create_job(req: JobCreateRequest, session: AsyncSession = Depends(get_session)):
-    correlation_id = str(uuid.uuid4())
+async def create_job(req: JobCreateRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
     idem_key = req.idempotency_key()
 
     # Idempotency: return existing job if same URL + type
@@ -32,14 +32,15 @@ async def create_job(req: JobCreateRequest, session: AsyncSession = Depends(get_
     )
     existing_job = existing.scalar_one_or_none()
     if existing_job:
-        log.info("idempotent_hit", job_id=existing_job.id, correlation_id=correlation_id)
+        log.info("idempotent_hit", job_id=existing_job.id)
         return JobCreateResponse(id=existing_job.id, status=existing_job.status, message="Job already exists")
 
-    # Create job
+    # Create job with correlation_id for worker to pick up
     job_id = str(uuid.uuid4())
     job = Job(
         id=job_id,
         idempotency_key=idem_key,
+        correlation_id=correlation_id,
         document_url=str(req.document_url),
         analysis_type=req.analysis_type.value,
         status=JobStatus.pending.value,
@@ -58,7 +59,7 @@ async def create_job(req: JobCreateRequest, session: AsyncSession = Depends(get_
     session.add(audit)
     await session.commit()
 
-    log.info("job_created", job_id=job_id, correlation_id=correlation_id)
+    log.info("job_created", job_id=job_id)
     return JobCreateResponse(id=job_id, status=JobStatus.pending.value)
 
 

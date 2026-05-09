@@ -34,6 +34,7 @@ class Job(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     idempotency_key = Column(String(64), unique=True, nullable=False, index=True)
+    correlation_id = Column(String(36), nullable=True)
     document_url = Column(Text, nullable=False)
     analysis_type = Column(String(20), nullable=False)
     status = Column(String(20), nullable=False, default=JobStatus.pending.value)
