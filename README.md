@@ -2,6 +2,21 @@
 
 An async document processing agent that accepts documents (PDFs, text) via REST API, queues them, and analyzes them using Gemini LLM. Built for the Robotic Imaging AI Agent Engineer assessment.
 
+## WHAT I CUT
+
+1. Redis queue — Used DB polling instead. Fewer moving parts, one less service to deploy. Tradeoff: no consumer groups or message-level ack. At single-worker scale, DB polling is sufficient. Would switch to Redis Streams for multi-worker
+2. PostgreSQL — Used SQLite for zero-config portability. Tradeoff: no concurrent write support Writes
+3. Multi-worker concurrency — Worker processes one job at a time. Sufficient for correctness demonstration but not for throughput. Tradeoff avoid race condition between multiple workers at the cost of low through put
+4. WebSocket/SSE for job status — Client must poll GET /jobs/:id. Would add WebSocket push notifications for real-time status updates.
+
+## WHAT NEXT
+1) Versioning system for schema, to make it modular for future expansion
+2) Redis Streams as job queue
+3) Adding check for malicious and unreadable pdf before sending to llm
+4) Add concurrent workers 
+5) Add callback to know when a job is done
+
+
 ## Architecture
 
 ```
@@ -31,7 +46,7 @@ Every state transition is recorded in the `audit_trail` table.
 |-----------|--------|-----|
 | Language | Python 3.12 | Async-native, strong typing, rich LLM ecosystem |
 | API | FastAPI | Native async, auto OpenAPI docs, Pydantic validation |
-| Database | SQLite (aiosqlite) | Zero-config, good enough for single-node, portable |
+| Database | SQLite (aiosqlite) | Zero-config for time constraint , good enough for single-node, portable |
 | LLM | Gemini 2.5 Flash | Free tier available, native PDF upload via File API |
 | Logging | structlog | Structured JSON logs with correlation IDs |
 
@@ -47,7 +62,7 @@ Every state transition is recorded in the `audit_trail` table.
 git clone <repo-url>
 cd AsyncDocumentProcessingService
 python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+source venv/bin/activate   
 pip install -r requirements.txt
 ```
 
@@ -67,7 +82,6 @@ All configuration is via environment variables (no hardcoded secrets):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `sqlite+aiosqlite:///data/docprocessor.db` | SQLAlchemy DB URL |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis URL (unused in current polling worker) |
 | `GEMINI_API_KEY` | `""` | Gemini API key. If empty/placeholder, runs in mock mode |
 | `LOG_LEVEL` | `info` | Log level |
 | `TOKEN_BUDGET_DEFAULT` | `4096` | Default max tokens per job |
@@ -140,20 +154,6 @@ The worker process:
 | `reason` | TEXT | Human-readable reason for the transition |
 | `timestamp` | DATETIME | When the transition happened (UTC) |
 
-### Inspecting the database
-
-```bash
-sqlite3 data/docprocessor.db
-
--- List all jobs
-SELECT id, status, analysis_type, created_at FROM jobs;
-
--- View audit trail for a job
-SELECT from_state, to_state, reason, timestamp FROM audit_trail WHERE job_id = '<job-id>' ORDER BY timestamp;
-
--- Check token spend
-SELECT id, json_extract(token_usage, '$.total_tokens') as tokens FROM jobs WHERE token_usage IS NOT NULL;
-```
 
 ## API Endpoints
 
@@ -245,15 +245,9 @@ curl http://localhost:8000/metrics
 }
 ```
 
-## Mock Mode
-
-If `GEMINI_API_KEY` is empty or set to a placeholder (`your-gemini-key-here`, `mock-key`), the agent runs in **mock mode** — it returns hardcoded results without calling the Gemini API. This is useful for testing the full pipeline without spending API credits.
 
 ## Worker Crash Recovery
 
 If the worker crashes mid-job, the job stays in a non-terminal state (`fetching`, `processing`, `validating`). On the next worker startup, `recover_stale_jobs()` finds any jobs stuck for >5 minutes and resets them to `pending` so they get re-processed. This ensures no job is lost.
 
-## PENDING
 
-1. How to handle high worker traffic -> add async concurrency between claim and process
-2. Add active worker count tracking and use it for load balancing
