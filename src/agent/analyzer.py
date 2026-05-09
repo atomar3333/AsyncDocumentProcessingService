@@ -1,7 +1,8 @@
 import json
 
 from google import genai
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.genai.errors import APIError, ClientError, ServerError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from src.config import settings
 from src.models.enums import AnalysisType
@@ -37,12 +38,27 @@ async def call_llm(doc: FetchedDocument, analysis_type: AnalysisType, token_budg
     return await _call_gemini(doc, analysis_type, token_budget)
 
 
+def _is_retryable(exception: BaseException) -> bool:
+    """Retry on rate limits (429), server errors (5xx), and connection issues."""
+    if isinstance(exception, (ConnectionError, TimeoutError)):
+        return True
+    if isinstance(exception, ClientError):
+        # 429 rate limit
+        return "429" in str(exception) or "RESOURCE_EXHAUSTED" in str(exception)
+    if isinstance(exception, ServerError):
+        return True
+    return False
+
+
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=60),
-    retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+    stop=stop_after_attempt(8),
+    wait=wait_exponential(multiplier=2, min=4, max=180),
+    retry=retry_if_exception(_is_retryable),
     before_sleep=lambda retry_state: logger.warning(
-        "llm_retry", attempt=retry_state.attempt_number, error=str(retry_state.outcome.exception())
+        "llm_retry",
+        attempt=retry_state.attempt_number,
+        wait_seconds=round(retry_state.next_action.sleep, 1),
+        error=str(retry_state.outcome.exception()),
     ),
 )
 async def _call_gemini(doc: FetchedDocument, analysis_type: AnalysisType, token_budget: int) -> tuple:
