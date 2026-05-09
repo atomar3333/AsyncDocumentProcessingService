@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.pytest_cache
+__pycache__
+*.pyc
+data/
+tests/
+PLAN.md
+Robotic_Imaging_Assessment.pdf
+.dockerignore
+venv/
+.venv/
