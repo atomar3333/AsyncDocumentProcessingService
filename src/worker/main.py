@@ -9,7 +9,9 @@ from src.config import settings
 from src.db.session import engine, async_session
 from src.logging import setup_logging
 from src.models.job import Base, Job, AuditTrail
-from src.models.enums import JobStatus
+from src.models.enums import JobStatus, AnalysisType
+from src.agent.fetcher import fetch_document
+from src.agent.analyzer import call_llm, validate_result
 
 POLL_INTERVAL = 2  # seconds
 STALE_TIMEOUT_MINUTES = 5
@@ -95,19 +97,22 @@ async def process_job(job_id):
 
         try:
             # FETCHING -> PROCESSING
-            await transition(session, job, JobStatus.processing, "Document fetched")
+            doc = await fetch_document(job.document_url)
+            await transition(session, job, JobStatus.processing,
+                             f"Document fetched ({doc.media_type}, {doc.page_count} pages)")
 
             # PROCESSING -> VALIDATING
-            # TODO: call agent/analyzer here
+            analysis_type = AnalysisType(job.analysis_type)
+            result, usage = await call_llm(doc, analysis_type, job.token_budget)
             await transition(session, job, JobStatus.validating, "Analysis complete")
 
             # VALIDATING -> COMPLETED
-            # TODO: validate output via Pydantic schema
-            job.result = {"message": "stub result — agent not yet wired"}
-            job.token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            validated = validate_result(result, analysis_type, settings.min_confidence_threshold)
+            job.result = validated
+            job.token_usage = usage
             await transition(session, job, JobStatus.completed, "Validation passed")
 
-            log_ctx.info("job_completed")
+            log_ctx.info("job_completed", tokens_used=usage.get("total_tokens", 0))
 
         except Exception as e:
             job.error = {"type": type(e).__name__, "detail": str(e)}
