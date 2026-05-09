@@ -16,6 +16,27 @@ An async document processing agent that accepts documents (PDFs, text) via REST 
 4) Add concurrent workers 
 5) Add callback to know when a job is done
 
+## Load Testing Results
+{
+"total_jobs": 45,
+"jobs_by_status": {
+"completed": 21,
+"failed": 2,
+"pending": 21,
+"processing": 1
+},
+"error_rate": 0.0444,
+"avg_latency_seconds": 348.41,
+"total_token_spend": 45221
+}
+
+### Observations : 
+
+### Errors
+3 failures — all RetryError (Gemini rate limit 429, exhausted 8 retries)
+
+### Bottleneck
+Single-threaded worker + Gemini free-tier rate limits. The worker processes one job at a time sequentially. With ~20-30s per LLM call + rate limit backoff, 45 jobs take ~15-20 minutes total. The high avg latency (290s) is mostly queue wait time, not processing time.
 
 ## Architecture
 
